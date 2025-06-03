@@ -186,12 +186,17 @@ vm_get_frame(void)
 
 /* Growing the stack. */
 static void
-vm_stack_growth(void *addr UNUSED)
+vm_stack_growth(void *addr)
 {
 	/* 25.05.30 정진영 작성
+	 * 25.06.03 정진영 수정
 	 * 스택 최하단에 익명 페이지를 추가하여 사용
 	 * addr은 PGSIZE로 내림(정렬)하여 사용 */
-	// vm_alloc_page(VM_ANON, addr, true); // 스택 최하단에 익명 페이지 추가
+	void *upage = pg_round_down(addr);
+
+	vm_alloc_page(VM_ANON | VM_MARKER_0, upage, true);	// 스택 최하단에 새 스택 페이지 할당
+	// thread_current()->user_rsp = thread_current()->tf->rsp;
+	vm_claim_page(upage);
 }
 
 /* Handle the fault on write_protected page */
