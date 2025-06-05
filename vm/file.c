@@ -41,10 +41,15 @@ file_backed_initializer (struct page *page, enum vm_type type, void *kva) {
 	page->operations = &file_ops;
 
 	struct file_page *file_page = &page->file;
-	/** TODO: file 백업 정보를 초기화
-	 * file_page에 어떤 정보가 있는지에 따라 다름
-	 * 타입도 변환?
-	 */
+
+	// TODO: page에 page->uninit.aux에 들어있는 정보를 구조체로 형변환 (ex. lazy_load_arg *)
+
+	struct lazy_load_arg *aux = (struct lazy_load_arg *)page->uninit.aux;
+	file_page->file = aux->file;
+	file_page->ofs = aux->ofs;
+	file_page->read_bytes = aux->read_bytes;
+	file_page->zero_bytes = aux->zero_bytes;
+	return true;
 }
 
 /* 파일에서 내용을 읽어와 페이지를 스왑인합니다. */
@@ -79,12 +84,14 @@ file_backed_swap_out(struct page *page)
 static void
 file_backed_destroy(struct page *page)
 {
-	struct file_page *file_page UNUSED = &page->file;
-	/** TODO: dirty_bit 확인 후 write_back
-	 * pml4_is_dirty를 사용해서 dirty bit 확인
-	 * write back을 할 때는 aux에 저장된 파일 정보를 사용
-	 * file_write를 사용하면 될 것 같아요
-	 */
+	struct file_page *file_page = &page->file;
+
+	 // 해당 페이지가 dirty 상태인지 확인
+	 if (pml4_is_dirty(thread_current()->pml4, page->va)) {
+		file_write_at(file_page->file, page->va, file_page->read_bytes, file_page->ofs);
+		pml4_set_dirty(thread_current()->pml4, page->va, 0);
+	 }
+	 pml4_clear_page(thread_current()->pml4, page->va);
 }
 
 // struct lazy_load_arg *
@@ -187,5 +194,27 @@ do_mmap(void *addr, size_t length, int writable, struct file *file, off_t offset
  */
 void do_munmap(void *addr) 
 {
-	
+	struct supplemental_page_table *spt = &thread_current()->spt;
+	struct page *page;
+
+	lock_acquire(&filesys_lock);		// 파일 시스템과의 동기화를 위해 전역 락 획득 (파일과 관련된 페이지일 수 있기 때문)	
+
+	page = spt_find_page(spt, addr);	// 현재 주소에 해당하는 페이지를 보조 페이지 테이블에서 검색
+	if (page == NULL) {					// 페이지가 존재하지 않으면 즉시 반환 (락 해제 후)
+		lock_release(&filesys_lock);
+		return;
+	}
+
+	int mmap_idx = page->mmap_idx;		// 이 페이지가 속한 mmap 영역의 전체 페이지 수를 가져옴
+
+	// mmap_idx 만큼 반복하며 페이지 해제 수행
+	for (int i = 0; i < mmap_idx; i++) {
+		struct page *target = spt_find_page(spt, addr);		// 현재 주소에 해당하는 페이지를 다시 찾음
+		if (target != NULL)				// 페이지가 존재한다면 보조 페이지 테이블에서 제거 (즉, unmap)
+			// destroy(target_page);
+			spt_remove_page(spt, target);					
+		addr += PGSIZE;					// 다음 페이지 주소로 이동 (페이지 크기만큼 증가)
+	}
+
+	lock_release(&filesys_lock);		// 락 해제 (모든 페이지 제거 후)
 }

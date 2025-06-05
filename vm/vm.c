@@ -119,14 +119,8 @@ spt_insert_page (struct supplemental_page_table *spt UNUSED, struct page *page U
 void
 spt_remove_page (struct supplemental_page_table *spt, struct page *page) 
 {
+	hash_delete(&thread_current()->spt.pages, &page->hash_elem);
 	vm_dealloc_page (page);
-
-	/** TODO: page 해제
-	 * 매핑된 프레임을 해제해야하나?
-	 * 프레임이 스왑되어있는지 체크할것?
-	 * 아마 pml4_clear_page 사용하면 된대요
-	 */
-
 	return true;
 }
 
@@ -316,14 +310,32 @@ supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
 
 		/* 1) type이 uninit이면 */
 		if (type == VM_UNINIT)
-		{ // uninit page 생성 & 초기화
+		{ 	// uninit page 생성 & 초기화
 			vm_initializer *init = src_page->uninit.init;
 			void *aux = src_page->uninit.aux;
 			vm_alloc_page_with_initializer(VM_ANON, upage, writable, init, aux);
 			continue;
 		}
 
-		/* 2) type이 uninit이 아니면 */
+		/* 2) type이 file이면{ */
+		if (type == VM_FILE) 
+		{	// file 
+			struct lazy_load_arg *aux = malloc(sizeof(struct lazy_load_arg));
+            aux->file = src_page->file.file;
+            aux->ofs = src_page->file.ofs;
+            aux->read_bytes = src_page->file.read_bytes;
+            aux->zero_bytes = src_page->file.zero_bytes;
+            if (!vm_alloc_page_with_initializer(type, upage, writable, NULL, aux))
+                return false;
+            struct page *page = spt_find_page(dst, upage);
+            file_backed_initializer(page, type, NULL);
+            page->frame = src_page->frame;
+            pml4_set_page(thread_current()->pml4, page->va, src_page->frame->kva, src_page->writable);
+            continue;
+
+		}
+
+		/* 3) type이 uninit이 아니면 */
 		if (!vm_alloc_page_with_initializer(type, upage, writable, NULL, NULL)) // uninit page 생성 & 초기화
 			// init(lazy_load_segment)는 page_fault가 발생할때 호출됨
 			// 지금 만드는 페이지는 page_fault가 일어날 때까지 기다리지 않고 바로 내용을 넣어줘야 하므로 필요 없음
