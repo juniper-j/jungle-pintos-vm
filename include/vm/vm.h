@@ -45,6 +45,7 @@ struct list frame_table;
 
 #define VM_TYPE(type) ((type) & 7)
 
+/* 25.06.04 정진영 수정 (mmap_idx 추가) */
 /* "페이지" 표현
  * 이는 일종의 "부모 클래스"이며, 네 개의 "자식 클래스"를 갖습니다.
  * uninit_page, file_page, anon_page, 그리고 page cache(project4)입니다.
@@ -59,6 +60,7 @@ struct page {
 	struct hash_elem hash_elem;			// 해시 저장용 elem
 	bool writable; 						// 쓰기 가능한 페이지 인지
 	bool is_loaded;						// 실제로 프레임에 로드되어 있는지
+	int mmap_idx;						// mmap 전체 중 몇번째 페이지인지를 기록
 
 	/* union은 여러 타입 중 하나만을 저장할 수 있는 특수한 자료형으로,  
 	 * 타입별 데이터는 union에 바인딩 됩니다. 각 함수는 현재 union을 자동으로 감지합니다. */
@@ -76,7 +78,7 @@ struct page {
 struct frame {
 	void *kva;
 	struct page *page;
-	struct list_elem elem; 
+	struct list_elem elem;	/* 25.05.30 고재웅 작성 */
 };
 
 /* 페이지 작업을 위한 함수 테이블입니다.

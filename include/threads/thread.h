@@ -136,11 +136,11 @@ struct thread {
 
 #ifdef VM
     struct supplemental_page_table spt; /* 가상 메모리 테이블 */
+    uint64_t user_rsp;                  /* rsp 담을 필드 */ /* 25.06.03 정진영 추가 */
 #endif
 	struct semaphore wait_sema;
 	struct semaphore fork_sema;
 	struct semaphore exit_sema;
-
 
     /* Owned by thread.c. */
     struct intr_frame tf;               /* 스위칭 정보 */

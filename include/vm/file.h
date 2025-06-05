@@ -2,11 +2,20 @@
 #define VM_FILE_H
 #include "filesys/file.h"
 #include "vm/vm.h"
+#include <stddef.h>
+#include <stdint.h>
 
 struct page;
 enum vm_type;
 
 struct file_page {
+};
+
+struct lazy_load_arg {
+	struct file *file;
+	off_t ofs;
+	uint32_t read_bytes;
+	uint32_t zero_bytes;
 };
 
 void vm_file_init (void);
