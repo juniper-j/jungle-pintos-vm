@@ -192,19 +192,16 @@ vm_stack_growth(void *addr)
 	 * 스택 최하단에 익명 페이지를 추가하여 사용
 	 * addr은 PGSIZE로 내림(정렬)하여 사용 */
 	void *upage = pg_round_down(addr);
+	vm_alloc_page(VM_ANON | VM_MARKER_0, upage, true);
 
-	if (spt_find_page(&thread_current()->spt, addr) != NULL)
-        return;  // 이미 만들어졌으면 아무 것도 하지 않음
+	// if (spt_find_page(&thread_current()->spt, addr) != NULL)
+    //     return;  // 이미 만들어졌으면 아무 것도 하지 않음
 
-	bool success = vm_alloc_page(VM_ANON | VM_MARKER_0, upage, true);	// 스택 최하단에 새 스택 페이지 할당
-	// printf("[vm_stack_growth] alloc %p %s\n", upage, success ? "SUCCESS" : "FAILURE");
-	if (!success)
-		return;
+	// bool success = vm_alloc_page(VM_ANON | VM_MARKER_0, upage, true);	// 스택 최하단에 새 스택 페이지 할당
+	// if (!success)
+	// 	return;
 
-	vm_claim_page(upage);
-	// bool claimed = vm_claim_page(upage);
-	// printf("[vm_stack_growth] claim %p %s\n", upage, claimed ? "SUCCESS" : "FAILURE");
-	// ASSERT(claimed);
+	// vm_claim_page(upage);
 }
 
 /* Handle the fault on write_protected page */
@@ -234,38 +231,40 @@ vm_try_handle_fault (struct intr_frame *f, void *addr, bool user, bool write, bo
 	if (addr == NULL || is_kernel_vaddr(addr))
 		return false;
 
-	struct page *page = spt_find_page(spt, addr);
-
-	// [TBD] 2. Write-protection fault (present but write to r/o page) 
-	if (!not_present && write)
-	// 	return vm_handle_wp(page);
-		return false;
+	// [TBD] 2. Write-protection fault (present but write to r/o page) 	// 이거 나중에 3번 뒤로 보내야 함
+	// if (!not_present && write)
+	// // 	return vm_handle_wp(page);
+	// 	return false;
 
 	// 3. Stack Growth 케이스
-	if (not_present && page == NULL) 
+	if (not_present) 
 	{
 		void *rsp = user ?  f->rsp : cur->user_rsp;
 
 		/* Case1: 스택 확장을 유발하는 명령어가 rsp보다 아래 주소에 먼저 접근함  e.g. PUSH, CALL, INT */
-		if (STACK_LIMIT <= rsp - 8 && rsp - 8 == addr && addr <= USER_STACK) {
+		if (STACK_LIMIT <= rsp - 8 && rsp - 8 <= addr && addr <= USER_STACK) {
             vm_stack_growth(addr);
 			return true;
 		}
-		/* Case2: 지역 변수 접근, 배열 사용 등  e.g. 일반적인 스택 사용 */
-		else if (STACK_LIMIT <= rsp && rsp <= addr && addr <= USER_STACK){
-			vm_stack_growth(addr);
-			return true;
-		}
+		// /* Case2: 지역 변수 접근, 배열 사용 등  e.g. 일반적인 스택 사용 */
+		// else if (STACK_LIMIT <= rsp && rsp <= addr && addr <= USER_STACK){
+		// 	vm_stack_growth(addr);
+		// 	return true;
+		// }
 
-		return false;	// 스택 확장 조건에도 맞지 않으면 fault
+		struct page *page = spt_find_page(spt, addr);	
+		if (page == NULL) 
+			return false;
+
+		// 4. 존재하는 페이지지만 write 불가인 경우
+		if (write && page && !page->writable) // write 불가능한 페이지에 write 요청한 경우
+			return false;
+
+		// 5. 정상적인 lazy load 요청
+		return vm_do_claim_page(page);
     }
 
-	// 4. 존재하는 페이지지만 write 불가인 경우
-	if (write && page && !page->writable) // write 불가능한 페이지에 write 요청한 경우
-		return false;	
-
-	// 5. 정상적인 lazy load 요청
-	return vm_do_claim_page(page);
+	return false;	// 스택 확장 조건에도 맞지 않으면 fault
 }
 
 /* Free the page.
@@ -308,8 +307,9 @@ vm_do_claim_page (struct page *page)
 	/* TODO: Insert page table entry to map page's VA to frame's PA. */
 	/* 페이지의 VA와 프레임의 KVA를 페이지 테이블에 매핑 */
 	struct thread *current = thread_current();
-    pml4_set_page(current->pml4, page->va, frame->kva, page->writable);
-
+	if (!pml4_set_page(thread_current()->pml4, page->va, frame->kva, page->writable)) {
+		return false;
+	}
 	return swap_in(page, frame->kva);
 }
 
