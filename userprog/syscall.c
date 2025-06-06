@@ -79,7 +79,7 @@ syscall_init (void) {
 /* The main system call interface */
 /* 25.06.03 정진영 수정 */
 void
-syscall_handler (struct intr_frame *f UNUSED) 
+syscall_handler (struct intr_frame *f) 
 {
     thread_current()->user_rsp = f->rsp;    // 현재 스레드에 유저 스택 포인터 저장
 
@@ -223,9 +223,44 @@ tid_t fork(const char *thread_name, struct intr_frame *f) {
     return process_fork(thread_name, f);  // 실제 유저 컨텍스트를 넘긴다
 }
 
+// int read(int fd, void *buffer, unsigned size) {
+// 	check_address(buffer);
+
+//     if (fd == 0) {  // 0(stdin) -> keyboard로 직접 입력
+//         int i = 0;  // 쓰레기 값 return 방지
+//         char c;
+//         unsigned char *buf = buffer;
+
+//         for (; i < size; i++) {
+//             c = input_getc();
+//             *buf++ = c;
+//             if (c == '\0')
+//                 break;
+//         }
+
+//         return i;
+//     }
+//     // 그 외의 경우
+//     if (fd < 3)  // stdout, stderr를 읽으려고 할 경우 & fd가 음수일 경우
+//         return -1;
+
+//     struct file *file = process_get_file(fd);
+//     off_t bytes = -1;
+
+//     if (file == NULL)  // 파일이 비어있을 경우
+//         return -1;
+
+//     lock_acquire(&filesys_lock);
+//     bytes = file_read(file, buffer, size);
+//     lock_release(&filesys_lock);
+
+//     return bytes;
+
+// }
+
 int read(int fd, void *buffer, unsigned size) {
 	check_address(buffer);
-
+    lock_acquire(&filesys_lock);
     if (fd == 0) {  // 0(stdin) -> keyboard로 직접 입력
         int i = 0;  // 쓰레기 값 return 방지
         char c;
@@ -237,27 +272,38 @@ int read(int fd, void *buffer, unsigned size) {
             if (c == '\0')
                 break;
         }
-
+        lock_release(&filesys_lock);
         return i;
     }
     // 그 외의 경우
     if (fd < 3)  // stdout, stderr를 읽으려고 할 경우 & fd가 음수일 경우
+    {
+        lock_release(&filesys_lock);
         return -1;
+    }
 
     struct file *file = process_get_file(fd);
     off_t bytes = -1;
 
     if (file == NULL)  // 파일이 비어있을 경우
+    {
+        lock_release(&filesys_lock);
         return -1;
+    }
 
-    lock_acquire(&filesys_lock);
+#ifdef VM
+    struct page *page = spt_find_page(&thread_current()->spt, buffer);
+    if (page && !page->writable){
+        lock_release(&filesys_lock);
+        exit(-1);
+    }
+#endif
     bytes = file_read(file, buffer, size);
     lock_release(&filesys_lock);
 
     return bytes;
 
 }
-
 
 // 파일 디스크럽터를 사용하여 파일의 크기를 가져오는 함수
 int filesize(int fd) {

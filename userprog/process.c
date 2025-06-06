@@ -21,6 +21,7 @@
 #include "lib/stdio.h"
 #include "intrinsic.h"
 #include "threads/synch.h"
+#include "userprog/syscall.h"
 #ifdef VM
 #include "vm/vm.h"
 #include "vm/file.h"
@@ -174,19 +175,21 @@ __do_fork (void *aux) {
         goto error;
 #endif
 
-	if (parent->fd_idx >= FDCOUNT_LIMIT)
-        goto error;
+if (parent->fd_idx >= FDCOUNT_LIMIT)
+goto error;
 
-    current->fd_idx = parent->fd_idx;  // fdt 및 idx 복제
+	lock_acquire(&filesys_lock);
     for (int fd = 3; fd < parent->fd_idx; fd++) {
-        if (parent->fd_table[fd] == NULL)
-            continue;
+		if (parent->fd_table[fd] == NULL)
+		continue;
         current->fd_table[fd] = file_duplicate(parent->fd_table[fd]);
     }
-
+	lock_release(&filesys_lock);
+	current->fd_idx = parent->fd_idx;  // fdt 및 idx 복제
+	
     sema_up(&current->fork_sema);  // fork 프로세스가 정상적으로 완료됐으므로 현재 fork용 sema unblock
-
-    process_init();
+    
+	process_init();
 
     /* Finally, switch to the newly created process. */
     if (succ)
@@ -227,17 +230,24 @@ process_exec (void *f_name) {
         argv[argc++] = arg;
 	
 	/* And then load the binary */
+	bool is_lock_held = lock_held_by_current_thread(&filesys_lock);
+	if (!is_lock_held)
+		lock_acquire(&filesys_lock);
 	success = load(file_name, &_if);
+	if (!is_lock_held)
+		lock_release(&filesys_lock);
 
-	if (!success)
-        return -1;
-
-    argument_stack(argv, argc, &_if);
-
-    palloc_free_page(file_name);
-
+	if (!success) {
+		palloc_free_page(file_name);
+		return -1;
+	}
+	argument_stack(argv, argc, &_if);
+		
+	_if.R.rdi = argc;
+	_if.R.rsi = (char *)_if.rsp + 8;
 
 	/* Start switched process. */
+	palloc_free_page(file_name);
 	do_iret (&_if);
 	NOT_REACHED ();
 }
@@ -302,6 +312,10 @@ process_wait (tid_t child_tid) {
 void
 process_exit (void) {
 	struct thread *curr = thread_current();
+
+	bool is_lock_held = lock_held_by_current_thread(&filesys_lock);
+	if (!is_lock_held)
+		lock_acquire(&filesys_lock);
 	for (int fd = 0; fd < curr->fd_idx; fd++)  // FDT 비우기
         close(fd);
 
@@ -312,6 +326,8 @@ process_exit (void) {
     process_cleanup();
 
     sema_up(&curr->wait_sema);  // 자식 프로세스가 종료될 때까지 대기하는 부모에게 signal
+	if (!is_lock_held)
+		lock_release(&filesys_lock);
     sema_down(&curr->exit_sema);  // 부모 프로세스가 종료될 떄까지 대기
 }
 

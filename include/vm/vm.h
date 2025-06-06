@@ -133,4 +133,7 @@ uint64_t page_hash(const struct hash_elem *e, void *aux);
 bool page_less(const struct hash_elem *a, const struct hash_elem *b, void *aux);
 void hash_page_destroy(struct hash_elem *e, void *aux);
 
+/* 25.06.06 정진영 작성 */
+#define STACK_LIMIT (USER_STACK - (1 << 20))
+
 #endif  /* VM_VM_H */

@@ -11,6 +11,7 @@
 /* 25.05.30 고재웅 작성 */
 #include <hash.h>
 #include "threads/vaddr.h"
+#include "userprog/process.h"
 
 /* 각 서브시스템의 초기화 코드를 호출하여 가상 메모리 서브시스템을 초기화합니다. */
 void 
@@ -46,6 +47,9 @@ page_get_type(struct page *page)
 static struct frame *vm_get_victim(void);
 static bool vm_do_claim_page(struct page *page);
 static struct frame *vm_evict_frame(void);
+static struct frame *vm_get_frame(void);
+static bool vm_handle_wp (struct page *page UNUSED);
+
 
 /* 25.06.01 고재웅 작성
  * 초기화 함수와 함께 대기 중인 페이지 객체를 생성한다. 페이지를 직접 생성하지 말고,
@@ -184,16 +188,27 @@ vm_stack_growth(void *addr)
 {
 	/* 25.05.30 정진영 작성
 	 * 25.06.03 정진영 수정
+	 * 25.06.06 정진영 수정
 	 * 스택 최하단에 익명 페이지를 추가하여 사용
 	 * addr은 PGSIZE로 내림(정렬)하여 사용 */
 	void *upage = pg_round_down(addr);
 
-	vm_alloc_page(VM_ANON | VM_MARKER_0, upage, true);	// 스택 최하단에 새 스택 페이지 할당
-	// thread_current()->user_rsp = thread_current()->tf->rsp;
+	if (spt_find_page(&thread_current()->spt, addr) != NULL)
+        return;  // 이미 만들어졌으면 아무 것도 하지 않음
+
+	bool success = vm_alloc_page(VM_ANON | VM_MARKER_0, upage, true);	// 스택 최하단에 새 스택 페이지 할당
+	// printf("[vm_stack_growth] alloc %p %s\n", upage, success ? "SUCCESS" : "FAILURE");
+	if (!success)
+		return;
+
 	vm_claim_page(upage);
+	// bool claimed = vm_claim_page(upage);
+	// printf("[vm_stack_growth] claim %p %s\n", upage, claimed ? "SUCCESS" : "FAILURE");
+	// ASSERT(claimed);
 }
 
 /* Handle the fault on write_protected page */
+/* Copy on Write 과제용 */
 static bool
 vm_handle_wp (struct page *page UNUSED) 
 {
@@ -210,31 +225,47 @@ vm_handle_wp (struct page *page UNUSED)
  * 대한 예외를 처리하라
  */
 bool
-vm_try_handle_fault (struct intr_frame *f UNUSED, void *addr UNUSED,
-		bool user UNUSED, bool write UNUSED, bool not_present UNUSED) 
+vm_try_handle_fault (struct intr_frame *f, void *addr, bool user, bool write, bool not_present) 
 {
-	struct supplemental_page_table *spt UNUSED = &thread_current ()->spt;
-	struct page *page = NULL;
-	/* TODO: Validate the fault */
-	/* TODO: Your code goes here */
+	struct thread *cur = thread_current();
+	struct supplemental_page_table *spt = &cur->spt;
+
 	// 1. 주소 유효성 검사
-	if (addr == NULL)
+	if (addr == NULL || is_kernel_vaddr(addr))
 		return false;
 
-	if (is_kernel_vaddr(addr))
+	struct page *page = spt_find_page(spt, addr);
+
+	// [TBD] 2. Write-protection fault (present but write to r/o page) 
+	if (!not_present && write)
+	// 	return vm_handle_wp(page);
 		return false;
 
-	if (not_present) // 접근한 메모리의 physical page가 존재하지 않은 경우
-    {
-        /* TODO: Validate the fault */
-        page = spt_find_page(spt, addr);
-        if (page == NULL)
-            return false;
-        if (write == 1 && page->writable == 0) // write 불가능한 페이지에 write 요청한 경우
-            return false;
-        return vm_do_claim_page(page);
+	// 3. Stack Growth 케이스
+	if (not_present && page == NULL) 
+	{
+		void *rsp = user ?  f->rsp : cur->user_rsp;
+
+		/* Case1: 스택 확장을 유발하는 명령어가 rsp보다 아래 주소에 먼저 접근함  e.g. PUSH, CALL, INT */
+		if (STACK_LIMIT <= rsp - 8 && rsp - 8 == addr && addr <= USER_STACK) {
+            vm_stack_growth(addr);
+			return true;
+		}
+		/* Case2: 지역 변수 접근, 배열 사용 등  e.g. 일반적인 스택 사용 */
+		else if (STACK_LIMIT <= rsp && rsp <= addr && addr <= USER_STACK){
+			vm_stack_growth(addr);
+			return true;
+		}
+
+		return false;	// 스택 확장 조건에도 맞지 않으면 fault
     }
-    return false;
+
+	// 4. 존재하는 페이지지만 write 불가인 경우
+	if (write && page && !page->writable) // write 불가능한 페이지에 write 요청한 경우
+		return false;	
+
+	// 5. 정상적인 lazy load 요청
+	return vm_do_claim_page(page);
 }
 
 /* Free the page.
