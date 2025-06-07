@@ -1,6 +1,7 @@
-/* anon.c: Implementation of page for non-disk image (a.k.a. anonymous page). */
+/* anon.c: 디스크 이미지가 아닌 페이지(익명 페이지)의 구현 */
 
 #include "vm/vm.h"
+#include "include/threads/vaddr.h"
 #include "devices/disk.h"
 
 /* DO NOT MODIFY BELOW LINE */
