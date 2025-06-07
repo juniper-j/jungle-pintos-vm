@@ -52,14 +52,17 @@ void check_address(void *addr)
 
     #ifdef VM
         /* SPT에 존재하지 않는다면 잘못된 접근 */
-        struct thread *t = thread_current();
-        if (spt_find_page(&t->spt, addr) == NULL)
+        if (spt_find_page(&thread_current()->spt, addr) == NULL)
             exit(-1);
     #else
         /* 페이지 테이블에서 직접 확인 (Project 2까지) */
-        if (pml4_get_page(thread_current()->pml4, addr) == NULL)
+        if (pml4_get_page(&thread_current()->pml4, addr) == NULL)
             exit(-1);
     #endif        
+    // if (addr == NULL)
+    //     exit(-1);
+    // if (!is_user_vaddr(addr))
+    //     exit(-1);
 }
 
 void
@@ -81,7 +84,7 @@ syscall_init (void) {
 void
 syscall_handler (struct intr_frame *f) 
 {
-    thread_current()->user_rsp = f->rsp;    // 현재 스레드에 유저 스택 포인터 저장
+    thread_current()->saved_user_rsp = f->rsp;    // 현재 스레드에 유저 스택 포인터 저장
 
 	switch (f->R.rax) {
 	case SYS_HALT:

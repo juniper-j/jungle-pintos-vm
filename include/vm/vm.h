@@ -92,6 +92,33 @@ struct page_operations {
 	enum vm_type type;
 };
 
+/* lazy load 시 사용되는 argument 구조체 */
+struct lazy_load_arg {
+    struct file *file;
+    off_t ofs;
+    uint32_t read_bytes;
+    uint32_t zero_bytes;
+};
+
+/* lazy load 시 사용되는 argument 구조체 */
+// struct lazy_load_arg {
+//     enum vm_type type;
+//     union {
+//         struct {
+//             struct file *file;
+//             off_t ofs;
+//             uint32_t read_bytes;
+//             uint32_t zero_bytes;
+//         } file_arg;
+//         struct {
+//             struct file *file;
+//             off_t ofs;
+//             uint32_t read_bytes;
+//             uint32_t zero_bytes;
+//         } anon_arg;
+//     };
+// };
+
 #define swap_in(page, v) (page)->operations->swap_in ((page), v)
 #define swap_out(page) (page)->operations->swap_out (page)
 #define destroy(page) \
@@ -101,8 +128,7 @@ struct page_operations {
  * 이 구조체에 대해 특정 설계를 강제하지 않습니다.
  * 모든 설계는 여러분에게 달려 있습니다. */
 struct supplemental_page_table {
-	/* 25.05.30 고재웅 작성 */
-	struct hash pages;
+	struct hash pages;		/* 25.05.30 고재웅 작성 */
 };
 
 #include "threads/thread.h"

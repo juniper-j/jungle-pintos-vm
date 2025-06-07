@@ -136,7 +136,8 @@ struct thread {
 
 #ifdef VM
     struct supplemental_page_table spt; /* 가상 메모리 테이블 */
-    void *user_rsp;                     /* %rsp 정보 저장 */ /* 25.06.03 정진영 추가 */
+    void *stack_lower_bound;            /* 스택이 현재까지 성장한 최하단 경계 */
+    void *saved_user_rsp;               /* 유저 모드 %rsp 저장용 (page fault 시 사용) */
 #endif
 	struct semaphore wait_sema;
 	struct semaphore fork_sema;

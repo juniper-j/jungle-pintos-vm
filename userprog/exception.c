@@ -139,15 +139,14 @@ page_fault (struct intr_frame *f) {
 	intr_enable ();
 
 	/* Determine cause. */
-	not_present = (f->error_code & PF_P) == 0;
-	write = (f->error_code & PF_W) != 0;
-	user = (f->error_code & PF_U) != 0;
+	not_present = (f->error_code & PF_P) == 0;     // 페이지 존재 안함 fault인지 여부
+	write = (f->error_code & PF_W) != 0;           // write 요청인지 여부
+	user = (f->error_code & PF_U) != 0;            // user mode에서 발생했는지 여부
 #ifdef VM
 	/* For project 3 and later. */
 	if (vm_try_handle_fault (f, fault_addr, user, write, not_present))
 		return;
 #endif
-
 	/* Count page faults. */
 	page_fault_cnt++;
 	exit(-1);

@@ -752,6 +752,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 	ASSERT (pg_ofs (upage) == 0);						// upage는 페이지 정렬된 주소여야 함
 	ASSERT (ofs % PGSIZE == 0);							// 파일 오프셋도 페이지 크기의 배수여야 함
 
+	file_seek (file, ofs);
 	while (read_bytes > 0 || zero_bytes > 0) {
 		/* 이 페이지를 채우는 방법을 계산합니다. 
 		 * 파일에서 PAGE_READ_BYTES 만큼 읽고 나머지 PAGE_ZERO_BYTES 만큼 0으로 채웁니다. */
@@ -787,23 +788,20 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 static bool
 setup_stack (struct intr_frame *if_) {
 	bool success = false;
-	void *stack_bottom = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
-
-	/* TODO: stack_bottom에 스택을 매핑하고 페이지를 즉시 요청하세요.
-	 * TODO: 성공하면, rsp를 그에 맞게 설정하세요.
-	 * TODO: 페이지가 스택임을 표시해야 합니다.
-	 * TODO: Your code goes here */
+	void *stack_lower_bound = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
 	
 	/* 1) stack_bottom에 페이지를 하나 할당받는다.
 	 * VM_MARKER_0: 스택이 저장된 메모리 페이지임을 식별하기 위해 추가
 	 * writable: argument_stack()에서 값을 넣어야 하니 True */
-	if (vm_alloc_page_with_initializer(VM_ANON | VM_MARKER_0, stack_bottom, 1, NULL, NULL))
-	{
+	if (vm_alloc_page(VM_ANON | VM_MARKER_0, stack_lower_bound, 1)) {
 		// 2) 할당 받은 페이지에 바로 물리 프레임을 매핑한다.
-		success = vm_claim_page(stack_bottom);
-		if (success)
+		success = vm_claim_page(stack_lower_bound);
+
+		if (success) {
 			// 3) rsp를 변경한다. (argument_stack에서 이 위치부터 인자를 push한다.)
 			if_->rsp = USER_STACK;
+			thread_current()->stack_lower_bound = stack_lower_bound;
+		}
 	}
 	return success;
 }
