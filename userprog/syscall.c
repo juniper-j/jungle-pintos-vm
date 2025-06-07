@@ -224,42 +224,8 @@ tid_t fork(const char *thread_name, struct intr_frame *f) {
     return process_fork(thread_name, f);  // 실제 유저 컨텍스트를 넘긴다
 }
 
-// int read(int fd, void *buffer, unsigned size) {
-// 	check_address(buffer);
-
-//     if (fd == 0) {  // 0(stdin) -> keyboard로 직접 입력
-//         int i = 0;  // 쓰레기 값 return 방지
-//         char c;
-//         unsigned char *buf = buffer;
-
-//         for (; i < size; i++) {
-//             c = input_getc();
-//             *buf++ = c;
-//             if (c == '\0')
-//                 break;
-//         }
-
-//         return i;
-//     }
-//     // 그 외의 경우
-//     if (fd < 3)  // stdout, stderr를 읽으려고 할 경우 & fd가 음수일 경우
-//         return -1;
-
-//     struct file *file = process_get_file(fd);
-//     off_t bytes = -1;
-
-//     if (file == NULL)  // 파일이 비어있을 경우
-//         return -1;
-
-//     lock_acquire(&filesys_lock);
-//     bytes = file_read(file, buffer, size);
-//     lock_release(&filesys_lock);
-
-//     return bytes;
-
-// }
-
-int read(int fd, void *buffer, unsigned size) {
+int read(int fd, void *buffer, unsigned size) 
+{
 	check_address(buffer);
     lock_acquire(&filesys_lock);
     if (fd == 0) {  // 0(stdin) -> keyboard로 직접 입력
@@ -277,17 +243,17 @@ int read(int fd, void *buffer, unsigned size) {
         return i;
     }
     // 그 외의 경우
-    if (fd < 3)  // stdout, stderr를 읽으려고 할 경우 & fd가 음수일 경우
-    {
+    if (fd < 2) 
+    {   // stdout, stderr를 읽으려고 할 경우 & fd가 음수일 경우
         lock_release(&filesys_lock);
         return -1;
     }
-
+    
     struct file *file = process_get_file(fd);
     off_t bytes = -1;
 
-    if (file == NULL)  // 파일이 비어있을 경우
-    {
+    if (file == NULL)  
+    {   // 빈 파일, stdout, stderr를 읽으려고 할 경우
         lock_release(&filesys_lock);
         return -1;
     }
@@ -299,12 +265,51 @@ int read(int fd, void *buffer, unsigned size) {
         exit(-1);
     }
 #endif
+
     bytes = file_read(file, buffer, size);
     lock_release(&filesys_lock);
 
     return bytes;
-
 }
+
+// int 
+// read(int fd, void *buffer, unsigned length) 
+// {
+//     struct thread *curr = thread_current();
+//     check_address(buffer);
+// /** #project3-Stack Growth */
+// #ifdef VM
+//     struct page *page = spt_find_page(&thread_current()->spt, buffer);
+//     if (page && !page->writable)
+//         exit(-1);
+// #endif
+//     struct file *file = process_get_file(fd);
+
+//     if (file == 0) { 
+//         int i = 0; 
+//         char c;
+//         unsigned char *buf = buffer;
+
+//         for (; i < length; i++) {
+//             c = input_getc();
+//             *buf++ = c;
+//             if (c == '\0')
+//                 break;
+//         }
+//         return i;
+//     }
+
+//     if (file == NULL || file == 1 || file == 2)  // 빈 파일, stdout, stderr를 읽으려고 할 경우
+//         return -1;
+
+//     off_t bytes = -1;
+
+//     lock_acquire(&filesys_lock);
+//     bytes = file_read(file, buffer, length);
+//     lock_release(&filesys_lock);
+
+//     return bytes;
+// }
 
 // 파일 디스크럽터를 사용하여 파일의 크기를 가져오는 함수
 int filesize(int fd) {
