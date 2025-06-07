@@ -191,17 +191,16 @@ vm_stack_growth(void *addr)
 	 * 스택 최하단에 익명 페이지를 추가하여 사용
 	 * addr은 PGSIZE로 내림(정렬)하여 사용 */
 	void *upage = pg_round_down(addr);
+	// vm_alloc_page(VM_ANON | VM_MARKER_0, upage, true);
+
 	if (spt_find_page(&thread_current()->spt, upage) != NULL)
         return;  // 이미 만들어졌으면 아무 것도 하지 않음
 
-	// bool success = vm_alloc_page(VM_ANON | VM_MARKER_0, pg_round_down(addr), 1);	// 스택 최하단에 새 스택 페이지 할당
-	// if (!success)
-	// 	return;
+	bool success = vm_alloc_page(VM_ANON | VM_MARKER_0, upage, true);	// 스택 최하단에 새 스택 페이지 할당
+	if (!success)
+		return;
 
-	// vm_claim_page(upage);
-
-	vm_alloc_page(VM_ANON | VM_MARKER_0, upage, 1);
-	thread_current()->stack_lower_bound = upage;
+	vm_claim_page(upage);
 }
 
 /* Handle the fault on write_protected page */
@@ -248,32 +247,42 @@ vm_try_handle_fault (struct intr_frame *f, void *addr, bool user, bool write, bo
 		void *rsp = user ?  f->rsp : cur->saved_user_rsp;
 
 		/* Case1: PUSH, CALL, INT 등으로 rsp보다 낮은 주소 먼저 접근 */
-		/* 스택 포인터보다 더 낮은 주소를 먼저 참조한 경우 -> 명시적으로 스택 확장 요청이 온 것 */
+		/* 스택 포인터보다 더 낮은 주소를 먼저 참조한 경우 */
 		if (cur->stack_lower_bound <= rsp - 8 && rsp - 8 == addr && addr <= USER_STACK) {
 			vm_stack_growth(addr);
-			// return true;
+			return true;
 		}
-		/* Case2: 일반적 stack 사용  e.g. 지역 변수 접근, 배열 사용 등 */
+		/* Case2: 일반적 stack 사용 */
 		else if (cur->stack_lower_bound <= rsp && rsp <= addr && addr <= USER_STACK) {
 			vm_stack_growth(addr);
-			// return true;
+			return true;
 		}
 
-		// 4. lazy load 처리
+		// /* Case1: 스택 확장을 유발하는 명령어가 rsp보다 아래 주소에 먼저 접근함  e.g. PUSH, CALL, INT */
+		// if (STACK_LIMIT <= rsp - 8 && rsp - 8 == addr && addr <= USER_STACK) {
+        //     vm_stack_growth(addr);
+		// 	return true;
+		// }
+		// /* Case2: 지역 변수 접근, 배열 사용 등  e.g. 일반적인 스택 사용 */
+		// else if (STACK_LIMIT <= rsp && rsp <= addr && addr <= USER_STACK){
+		// 	vm_stack_growth(addr);
+		// 	return true;
+		// }
+
 		struct page *page = spt_find_page(spt, addr);	
 		if (page == NULL) 
 			return false;
 
-		// 5. write 불가능한 페이지에 write 요청한 경우
-		if (write && !page->writable)
+		// 4. 존재하는 페이지지만 write 불가인 경우
+		if (write && page && !page->writable) // write 불가능한 페이지에 write 요청한 경우
 			return false;
 
-		// 6. lazy page 실제 가져오기
+		// 5. 정상적인 lazy load 요청
 		// stack growth 아니고, 기존에 SPT에 등록된 lazy page를 실제로 가져오는 path임
 		return vm_do_claim_page(page);
     }
-	// 7. not_present == false → 아직 wp 미처리라면 false
-	return false;
+
+	return false;	// 스택 확장 조건에도 맞지 않으면 fault
 }
 
 /* Free the page.
@@ -306,7 +315,7 @@ vm_do_claim_page (struct page *page)
 {
 	struct frame *frame = vm_get_frame ();
 	/* TODO: vm_get_frame이 실패하면 swap_out */
-
+	
 	frame->page = page;
 	page->frame = frame;
 
@@ -331,8 +340,8 @@ supplemental_page_table_init (struct supplemental_page_table *spt)
 
 /* Copy supplemental page table from src to dst */
 bool
-supplemental_page_table_copy (struct supplemental_page_table *dst,
-		struct supplemental_page_table *src) 
+supplemental_page_table_copy (struct supplemental_page_table *dst UNUSED,
+		struct supplemental_page_table *src UNUSED) 
 {
 	struct hash_iterator i;
 	hash_first(&i, &src->pages);
@@ -349,7 +358,7 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
 		{ 	// uninit page 생성 & 초기화
 			vm_initializer *init = src_page->uninit.init;
 			void *aux = src_page->uninit.aux;
-			vm_alloc_page_with_initializer(type, upage, writable, init, aux);
+			vm_alloc_page_with_initializer(VM_ANON, upage, writable, init, aux);
 			continue;
 		}
 
@@ -361,20 +370,12 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
             aux->ofs = src_page->file.ofs;
             aux->read_bytes = src_page->file.read_bytes;
             aux->zero_bytes = src_page->file.zero_bytes;
-
-            if (!vm_alloc_page_with_initializer(type, upage, writable, NULL, aux)) {
-				free(aux);
+            if (!vm_alloc_page_with_initializer(type, upage, writable, NULL, aux))
                 return false;
-			}
-
-			// if (!vm_claim_page(upage))
-			// 	return false;
-
-            struct page *file_page = spt_find_page(dst, upage);
-            file_backed_initializer(file_page, type, NULL);
-            file_page->frame = src_page->frame;
-            pml4_set_page(&thread_current()->pml4, file_page->va, src_page->frame->kva, src_page->writable);
-			//memcpy(dst_page->frame->kva, src_page->frame->kva, PGSIZE); // ???
+            struct page *page = spt_find_page(dst, upage);
+            file_backed_initializer(page, type, NULL);
+            page->frame = src_page->frame;
+            pml4_set_page(thread_current()->pml4, page->va, src_page->frame->kva, src_page->writable);
             continue;
 
 		}

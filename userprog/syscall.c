@@ -11,6 +11,7 @@
 #include "intrinsic.h"
 #include "userprog/process.h"
 #include "threads/palloc.h"
+#include "vm/vm.h"
 #include <string.h>
 
 void syscall_entry (void);
@@ -52,17 +53,14 @@ void check_address(void *addr)
 
     #ifdef VM
         /* SPT에 존재하지 않는다면 잘못된 접근 */
-        if (spt_find_page(&thread_current()->spt, addr) == NULL)
+        struct thread *t = thread_current();
+        if (spt_find_page(&t->spt, addr) == NULL)
             exit(-1);
     #else
         /* 페이지 테이블에서 직접 확인 (Project 2까지) */
-        if (pml4_get_page(&thread_current()->pml4, addr) == NULL)
+        if (pml4_get_page(thread_current()->pml4, addr) == NULL)
             exit(-1);
     #endif        
-    // if (addr == NULL)
-    //     exit(-1);
-    // if (!is_user_vaddr(addr))
-    //     exit(-1);
 }
 
 void

@@ -789,19 +789,22 @@ static bool
 setup_stack (struct intr_frame *if_) {
 	bool success = false;
 	void *stack_lower_bound = (void *) (((uint8_t *) USER_STACK) - PGSIZE);
+
+	/* TODO: stack_bottom에 스택을 매핑하고 페이지를 즉시 요청하세요.
+	 * TODO: 성공하면, rsp를 그에 맞게 설정하세요.
+	 * TODO: 페이지가 스택임을 표시해야 합니다.
+	 * TODO: Your code goes here */
 	
 	/* 1) stack_bottom에 페이지를 하나 할당받는다.
 	 * VM_MARKER_0: 스택이 저장된 메모리 페이지임을 식별하기 위해 추가
 	 * writable: argument_stack()에서 값을 넣어야 하니 True */
-	if (vm_alloc_page(VM_ANON | VM_MARKER_0, stack_lower_bound, 1)) {
+	if (vm_alloc_page_with_initializer(VM_ANON | VM_MARKER_0, stack_lower_bound, 1, NULL, NULL))
+	{
 		// 2) 할당 받은 페이지에 바로 물리 프레임을 매핑한다.
 		success = vm_claim_page(stack_lower_bound);
-
-		if (success) {
+		if (success)
 			// 3) rsp를 변경한다. (argument_stack에서 이 위치부터 인자를 push한다.)
 			if_->rsp = USER_STACK;
-			thread_current()->stack_lower_bound = stack_lower_bound;
-		}
 	}
 	return success;
 }
