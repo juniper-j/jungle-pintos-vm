@@ -51,17 +51,37 @@ void check_address(void *addr)
     if (!is_user_vaddr(addr) || addr == NULL)   // null이거나 커널 영역 접근 시
         exit(-1);
 
-    #ifdef VM
-        /* SPT에 존재하지 않는다면 잘못된 접근 */
-        struct thread *t = thread_current();
-        if (spt_find_page(&t->spt, addr) == NULL)
-            exit(-1);
-    #else
-        /* 페이지 테이블에서 직접 확인 (Project 2까지) */
-        if (pml4_get_page(thread_current()->pml4, addr) == NULL)
-            exit(-1);
-    #endif        
+    /* 페이지 테이블에서 직접 확인 (Project 2까지) */
+    if (pml4_get_page(thread_current()->pml4, addr) == NULL)
+        exit(-1);
+
+    return spt_find_page (&thread_current ()->spt, addr);
 }
+
+#ifdef VM
+/* Validate user buffer. If WRITABLE is true, the buffer must be writable. */
+static void
+check_valid_buffer (void *buffer, size_t size, bool writable)
+{
+    for (size_t i = 0; i < size; i += 8)
+    {
+        void *addr = (uint8_t *)buffer + i;
+        struct page *page = spt_find_page (&thread_current ()->spt, addr);
+
+        if (!is_user_vaddr(addr))
+            exit (-1);
+
+        if (writable && page && !page->writable)
+            exit (-1);
+    }
+}
+#else
+static void
+check_valid_buffer (void *buffer, size_t size UNUSED, bool writable UNUSED)
+{
+    check_address (buffer);
+}
+#endif
 
 void
 syscall_init (void) {
@@ -82,7 +102,9 @@ syscall_init (void) {
 void
 syscall_handler (struct intr_frame *f) 
 {
+#ifdef VM
     thread_current()->saved_user_rsp = f->rsp;    // 현재 스레드에 유저 스택 포인터 저장
+#endif
 
 	switch (f->R.rax) {
 	case SYS_HALT:
@@ -152,8 +174,9 @@ void exit(int status){
     thread_exit();
 }
 
-int write(int fd, const void *buffer, unsigned size) {
-	check_address(buffer);
+int write(int fd, const void *buffer, unsigned size) 
+{
+    check_valid_buffer ((void *)buffer, size, false);
 
     off_t bytes = -1;
 
@@ -224,9 +247,11 @@ tid_t fork(const char *thread_name, struct intr_frame *f) {
     return process_fork(thread_name, f);  // 실제 유저 컨텍스트를 넘긴다
 }
 
-int read(int fd, void *buffer, unsigned size) 
+int read(int fd, void *buffer, unsigned size)
 {
-	check_address(buffer);
+    // check_address(buffer);   // [pt-grow-stk-sc] pml4_get_page(thread_current()->pml4, addr) == NULL 조건에서 걸림
+    check_valid_buffer (buffer, size, true);
+
     lock_acquire(&filesys_lock);
     if (fd == 0) {  // 0(stdin) -> keyboard로 직접 입력
         int i = 0;  // 쓰레기 값 return 방지
@@ -258,58 +283,19 @@ int read(int fd, void *buffer, unsigned size)
         return -1;
     }
 
-#ifdef VM
-    struct page *page = spt_find_page(&thread_current()->spt, buffer);
-    if (page && !page->writable){
-        lock_release(&filesys_lock);
-        exit(-1);
-    }
-#endif
+// #ifdef VM   // [pt-grow-stk-sc] 이건 주석 처리하던 말던 상관 없음
+//     struct page *page = spt_find_page(&thread_current()->spt, buffer);
+//     if (page && !page->writable){
+//         lock_release(&filesys_lock);
+//         exit(-1);
+//     }
+// #endif
 
     bytes = file_read(file, buffer, size);
     lock_release(&filesys_lock);
 
     return bytes;
 }
-
-// int 
-// read(int fd, void *buffer, unsigned length) 
-// {
-//     struct thread *curr = thread_current();
-//     check_address(buffer);
-// /** #project3-Stack Growth */
-// #ifdef VM
-//     struct page *page = spt_find_page(&thread_current()->spt, buffer);
-//     if (page && !page->writable)
-//         exit(-1);
-// #endif
-//     struct file *file = process_get_file(fd);
-
-//     if (file == 0) { 
-//         int i = 0; 
-//         char c;
-//         unsigned char *buf = buffer;
-
-//         for (; i < length; i++) {
-//             c = input_getc();
-//             *buf++ = c;
-//             if (c == '\0')
-//                 break;
-//         }
-//         return i;
-//     }
-
-//     if (file == NULL || file == 1 || file == 2)  // 빈 파일, stdout, stderr를 읽으려고 할 경우
-//         return -1;
-
-//     off_t bytes = -1;
-
-//     lock_acquire(&filesys_lock);
-//     bytes = file_read(file, buffer, length);
-//     lock_release(&filesys_lock);
-
-//     return bytes;
-// }
 
 // 파일 디스크럽터를 사용하여 파일의 크기를 가져오는 함수
 int filesize(int fd) {
