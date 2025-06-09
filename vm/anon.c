@@ -34,8 +34,8 @@ vm_anon_init (void) {
 	swap_table = bitmap_create (disk_size(swap_disk) / (PGSIZE / DISK_SECTOR_SIZE));
 	if (swap_table == NULL) {
 		PANIC("Failed to create swap bitmap!");
-	lock_init(&bitmap_lock);
 	}
+	lock_init(&bitmap_lock);
 }
 
 /* Initialize the file mapping 
@@ -73,11 +73,12 @@ anon_swap_in (struct page *page, void *kva)
 	ASSERT(swap_idx != BITMAP_ERROR);			// swap_idx는 정상 값이어야 함
 	ASSERT(bitmap_test(swap_table, swap_idx));	// 해당 slot은 반드시 사용중이어야 함 (true)
 
+	ASSERT(page->frame != NULL);
+	ASSERT(page->frame->kva == kva);
+
 	for (int i = 0; i < 8; i++) {
 		disk_read(swap_disk, (swap_idx * 8) + i, kva + (DISK_SECTOR_SIZE * i));
 	}
-
-	page->frame->kva = kva;
 	
 	lock_acquire(&bitmap_lock);		// 동시에 다른 thread가 bitmap을 scan+flip 못 하게 serialize 처리
 	bitmap_reset(swap_table, swap_idx);
@@ -102,32 +103,51 @@ anon_swap_out (struct page *page)
 	lock_acquire(&bitmap_lock);		// 동시에 다른 thread가 bitmap을 scan+flip 못 하게 serialize 처리
 	size_t swap_idx = bitmap_scan_and_flip(swap_table, 0, 1, false);
 	lock_release(&bitmap_lock);
-
+	
 	// swap slot 할당 실패 시 처리
 	if (swap_idx == BITMAP_ERROR) {
 		ASSERT(bitmap_test(swap_table, swap_idx) == false);	// 해당 비트는 flip되지 않았어야 정상 → bitmap_test()로 검증
 		return false;		// 할당 실패했으므로 해당 bit는 여전히 false여야 함
 	}
-
+	
 	// anon_page에 swap 위치 기록 → 이후 swap_in 시 사용
 	anon_page->swap_idx = swap_idx;
-
+	
 	// 현재 페이지의 내용을 swap_disk에 저장 (8 sector 단위로 저장)
 	for (int i = 0; i < 8; i++) {
 		disk_write (swap_disk, swap_idx * 8 + i, page->frame->kva + DISK_SECTOR_SIZE * i);
 	}
-
+	
 	// 프레임 연결 해제
 	page->frame->page = NULL;	// frame과 page 연결 해제
 	page->frame = NULL;			// page가 frame 가리키지 않게 초기화
-
+	
 	// 현재 가상 주소(pml4)에서 해당 물리 페이지 매핑 제거 (다음 access 시 page fault 발생 유도)
 	pml4_clear_page (thread_current()->pml4, page->va);
 	return true;				// 성공적으로 swap out 완료
 }
 
-/* Destroy the anonymous page. PAGE will be freed by the caller. */
+/* anon page 구조체 자체가 제거될 때 호출됨 → 프로세스 종료 시 주로 발생, PAGE 구조체의 메모리 해제는 호출자의 책임 */
 static void
 anon_destroy (struct page *page) {
 	struct anon_page *anon_page = &page->anon;
+	
+	if (anon_page->swap_idx != BITMAP_ERROR) 
+	{	// 스왑 테이블에서 스왑 인덱스 해제
+		lock_acquire(&bitmap_lock);
+		bitmap_reset(swap_table, anon_page->swap_idx);
+		lock_release(&bitmap_lock);
+	}
+
+	if (page->frame)
+	{	// 프레임이 존재하면 프레임을 리스트에서 제거하고 해제
+		if (page->frame->page != NULL) {
+			list_remove(&page->frame->elem);
+		}
+		
+		page->frame->page = NULL;
+		palloc_free_page(page->frame->kva);
+		free(page->frame);
+		page->frame = NULL;
+	}
 }
