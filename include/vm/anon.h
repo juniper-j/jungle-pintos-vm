@@ -8,7 +8,7 @@ struct anon_page
 {
      /* 25.05.30 정진영 작성
      음수이면 스왑 아웃 상태가 아님 */
-     int swap_idx;
+     size_t swap_idx;
 };
 
 void vm_anon_init (void);

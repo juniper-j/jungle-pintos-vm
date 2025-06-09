@@ -390,7 +390,7 @@ void
             return NULL;
         }
     }
-    
+
     return do_mmap(addr, length, writable, file, offset);
 }
 

@@ -176,14 +176,14 @@ bitmap_flip (struct bitmap *b, size_t bit_idx) {
 	asm ("lock xorq %1, %0" : "=m" (b->bits[idx]) : "r" (mask) : "cc");
 }
 
-/* Returns the value of the bit numbered IDX in B. */
+/* 비트맵 B에서 IDX 번째 비트가 1(true)인지 0(false)인지 확인하여 결과를 반환 */
 bool
 bitmap_test (const struct bitmap *b, size_t idx) {
 	ASSERT (b != NULL);
 	ASSERT (idx < b->bit_cnt);
 	return (b->bits[elem_idx (idx)] & bit_mask (idx)) != 0;
 }
-
+
 /* Setting and testing multiple bits. */
 
 /* Sets all bits in B to VALUE. */
@@ -282,13 +282,10 @@ bitmap_scan (const struct bitmap *b, size_t start, size_t cnt, bool value) {
 	return BITMAP_ERROR;
 }
 
-/* Finds the first group of CNT consecutive bits in B at or after
-   START that are all set to VALUE, flips them all to !VALUE,
-   and returns the index of the first bit in the group.
-   If there is no such group, returns BITMAP_ERROR.
-   If CNT is zero, returns 0.
-   Bits are set atomically, but testing bits is not atomic with
-   setting them. */
+/* B 비트맵에서 START 위치 이후부터 시작하여 CNT개의 연속된 비트 그룹 중 모든 비트가 VALUE로 설정된 첫 번째 그룹을 찾는다.
+ * 해당 그룹의 모든 비트를 반대 값(!VALUE)으로 뒤집고, 그룹의 첫 번째 비트 인덱스를 반환한다.
+ * 만약 해당 조건을 만족하는 그룹이 없으면 BITMAP_ERROR를 반환한다. CNT가 0이면 0을 반환한다.
+ * 비트 설정(뒤집기) 작업은 원자적(atomic)으로 이루어지지만, 비트를 검사하는 작업과 설정하는 작업 간에는 원자성이 보장되지 않는다 */
 size_t
 bitmap_scan_and_flip (struct bitmap *b, size_t start, size_t cnt, bool value) {
 	size_t idx = bitmap_scan (b, start, cnt, value);
@@ -296,7 +293,7 @@ bitmap_scan_and_flip (struct bitmap *b, size_t start, size_t cnt, bool value) {
 		bitmap_set_multiple (b, idx, cnt, !value);
 	return idx;
 }
-
+
 /* File input and output. */
 
 #ifdef FILESYS
