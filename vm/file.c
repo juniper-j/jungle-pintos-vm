@@ -145,6 +145,7 @@ do_mmap(void *addr, size_t length, int writable, struct file *file, off_t offset
 	ASSERT(offset % PGSIZE == 0);
 
 	// 페이지 단위로 매핑 수행
+	int page_cnt = (read_bytes + zero_bytes) / PGSIZE; // total pages
 	size_t total_bytes = read_bytes + zero_bytes;
 	while (total_bytes > 0) 
 	{
@@ -175,9 +176,10 @@ do_mmap(void *addr, size_t length, int writable, struct file *file, off_t offset
 		// 해당 주소에 실제로 할당된 page 구조체를 가져와 mmap_idx 저장
 		struct page *p = spt_find_page(&thread_current()->spt, addr);
 		if (p != NULL)
-			p->mmap_idx = mmap_idx++;
+			p->mmap_idx = page_cnt;
 
 		// 다음 페이지로 이동
+		total_bytes -= PGSIZE;           // decrement loop variable
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
 		addr += PGSIZE;
