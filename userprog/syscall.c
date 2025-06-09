@@ -13,20 +13,11 @@
 #include "threads/palloc.h"
 #include "vm/vm.h"
 #include <string.h>
+#include <stdlib.h>    // malloc, free
+#include "devices/input.h"  // input_getc
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
-bool create (const char *file, unsigned initial_size);
-tid_t fork(const char *thread_name, struct intr_frame *f); 
-bool remove (const char *file);
-int exec (const char *file_name);
-int filesize(int fd) ;
-void close (int fd);
-int wait(tid_t pid);
-void seek(int fd, unsigned position);
-int tell(int fd);
-void *mmap(void *addr, size_t length, int writable, int fd, off_t offset);
-void munmap(void *addr);
 
 /* System call.
  *
@@ -44,8 +35,9 @@ void munmap(void *addr);
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
 
-/* 25.06.03 정진영 수정 */
-void check_address(void *addr)
+
+static void 
+check_address(void *addr)
 {
     // kernel VM 못가게, 할당된 page가 존재하도록(빈공간접근 못하게)
     if (!is_user_vaddr(addr) || addr == NULL)   // null이거나 커널 영역 접근 시
@@ -315,7 +307,7 @@ int exec (const char *file_name){
     char *cmd_copy = palloc_get_page(PAL_ZERO);
 
     if (cmd_copy == NULL)
-        return -1;
+        return -1; 
 
     memcpy(cmd_copy, file_name, size);
 
@@ -365,47 +357,49 @@ int wait(tid_t pid){
 };
 
 /* mmap은 파일의 내용을 메모리의 특정 주소 공간에 매팽하는 작업
- * 파일을 읽는 대신, 해당 주소를 읽는 것만으로 파일 내용을 얻을 수 있도록 함
- * 
- * 페이지 테이블 연동: 가상 주소 ↔ 페이지 테이블 ↔ 물리 프레임
- * 페이지 폴트 핸들러: 
- * fd로 열린 파일의 offset 바이트부터 length 바이트만큼 프로세스 va의 addr부터 매핑 
- * 매핑은 페이지 단위로 이루어짐
- * 
- * mmap(): 유저 인자로부터 커널 안전성 검사 수행 (권한, 정렬, 유효성 등)
- * do_mmap(): mmap 로직 전체를 책임 (페이지 등록, lazy loading, file 재열기 포함)
- */
-void *
-mmap (void *addr, size_t length, int writable, int fd, off_t offset) 
+* 파일을 읽는 대신, 해당 주소를 읽는 것만으로 파일 내용을 얻을 수 있도록 함
+* 
+* 페이지 테이블 연동: 가상 주소 ↔ 페이지 테이블 ↔ 물리 프레임
+* 페이지 폴트 핸들러: 
+* fd로 열린 파일의 offset 바이트부터 length 바이트만큼 프로세스 va의 addr부터 매핑 
+* 매핑은 페이지 단위로 이루어짐
+* 
+* mmap(): 유저 인자로부터 커널 안전성 검사 수행 (권한, 정렬, 유효성 등)
+* do_mmap(): mmap 로직 전체를 책임 (페이지 등록, lazy loading, file 재열기 포함)
+*/
+void 
+*mmap (void *addr, size_t length, int writable, int fd, off_t offset) 
 {
-    if (fd == 0 || fd == 1) return NULL;
+    // 기본 유효성 검사
+    if (pg_ofs(addr) != 0 || (uint64_t)addr <= 0 || is_kernel_vaddr(addr) || pg_ofs(offset) != 0) {
+        return NULL;
+    }
 
-    int file_size = filesize(fd);
-    if (file_size == 0 || length == 0) return NULL;
-
-    if ((uint64_t)addr == 0 || (uint64_t)addr % PGSIZE != 0 || !is_user_vaddr(addr)) return NULL;
-
-    /* 추가하면 좋을 검사 항목 */
-    // if (offset % PGSIZE != 0) return NULL;  // offset 정렬 확인
-
-    // if (!is_user_vaddr(addr + length - 1)) return NULL; // 매핑하려는 전체 주소 영역 유효성 (범위 검사)
-
-    // void *check = addr;     // 매핑하려는 주소 범위에 이미 페이지가 존재하는지 검사
-    // for (; check < addr + length; check += PGSIZE) {
-    //     if (spt_find_page(&thread_current()->spt, check))
-    //         return NULL;
-    // }
-
-    // if (spt_find_page(&thread_current()->spt, addr)) return NULL;   // 이건 왜 하는지 모르겠음
+    if (is_kernel_vaddr((uint64_t)addr + length) || (uint64_t)addr + length <= 0) {
+        return NULL;
+    }
 
     struct file *file = process_get_file(fd);
-    if (file == NULL) return NULL;
+    if (file == NULL || length == 0) {
+        return NULL;
+    }
+
+    // 매핑 영역에 기존 페이지가 있는지 검사 (충돌 방지용)
+    for (void *check = addr; check < addr + length; check += PGSIZE) {
+        if (spt_find_page(&thread_current()->spt, check) != NULL) {
+            return NULL;
+        }
+    }
     
     return do_mmap(addr, length, writable, file, offset);
 }
 
-/* addr은 mmap으로 할당받은 시작주소 */
+/* 
+ * munmap()은 mmap으로 할당된 페이지들을 해제
+ * addr은 mmap으로 할당받은 시작 주소
+ */
 void
 munmap (void *addr) {
-    do_munmap(addr);
+    check_address(addr);   // 유저 영역 안전성 검사
+    do_munmap(addr);       // 실제 unmap 수행
 }

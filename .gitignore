@@ -94,8 +94,7 @@ autom4te.cache/
 config.status
 config.h
 
-# Pintos 특화 파일
+# # Pintos 특화 파일
 *.errors
 *.output
 *.result
-

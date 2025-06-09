@@ -94,20 +94,6 @@ file_backed_destroy(struct page *page)
 	 pml4_clear_page(thread_current()->pml4, page->va);
 }
 
-// struct lazy_load_arg *
-// make_arg(struct file *file, off_t ofs, size_t read_bytes)
-// {
-// 	struct lazy_load_info *arg = malloc(sizeof(struct lazy_load_arg));
-// 	if (!arg) return NULL;
-
-// 	arg->file = file;
-// 	arg->ofs = ofs;
-// 	arg->read_bytes = read_bytes;
-// 	arg->zero_bytes = (read_bytes < PGSIZE) ? PGSIZE - read_bytes : 0;
-
-// 	return arg;
-// }
-
 /* do_mmap(): mmap 로직 전체를 책임 (페이지 등록, lazy loading, file 재열기 포함) 
  * 
  * lazy loading으로 할당
@@ -118,18 +104,17 @@ void *
 do_mmap(void *addr, size_t length, int writable, struct file *file, off_t offset)
 {
 	void *start_addr = addr;				// 성공 시 반환할 원래 가상 주소
-	int mmap_idx = 0;  						// 각 페이지에 부여할 mmap_idx
 
-	// 파일 재열기 → 독립된 file 객체 필요 (close(fd)와 무관하게 파일 내용을 유지)
-	// 파일 시스템 작업이므로 동기화를 위해 전역 filesys_lock 획득 필요
+	// 파일 재열기 → 독립된 file 객체 필요
 	lock_acquire(&filesys_lock);			
 	struct file *reopened_file = file_reopen(file);	
 	lock_release(&filesys_lock);			
 
-	if (reopened_file == NULL) return NULL;
+	if (reopened_file == NULL) {
+		return NULL;
+	}
 
-	// 실제로 읽어야 할 바이트 수: 요청한 길이와 파일 크기 중 더 작은 값
-	// 페이지 보정용 zero padding 계산
+	// 실제로 읽어야 할 바이트 수 + zero padding 계산
 	size_t read_bytes = (file_length(reopened_file) < length) ? file_length(reopened_file) : length;
 	size_t zero_bytes = (read_bytes % PGSIZE == 0) ? 0 : PGSIZE - (read_bytes % PGSIZE);
 	
@@ -145,7 +130,9 @@ do_mmap(void *addr, size_t length, int writable, struct file *file, off_t offset
 	ASSERT(offset % PGSIZE == 0);
 
 	// 페이지 단위로 매핑 수행
-	size_t total_bytes = read_bytes + zero_bytes;
+	int page_cnt = (read_bytes + zero_bytes) / PGSIZE;	// 전체 페이지 수
+	size_t total_bytes = read_bytes + zero_bytes;		// 전체 바이트 수
+
 	while (total_bytes > 0) 
 	{
 		// 현재 페이지에서 실제로 읽을 바이트 수와 남은 공간 zero padding 계산
@@ -154,7 +141,8 @@ do_mmap(void *addr, size_t length, int writable, struct file *file, off_t offset
 
 		// lazy load용 인자 구조체 생성
 		struct lazy_load_arg *aux = malloc(sizeof(struct lazy_load_arg));
-		if (aux == NULL) {
+		if (aux == NULL) 
+		{	// 전체 실패 시 열린 파일 닫기
 			file_close(reopened_file);
 			return NULL;
 		}
@@ -172,14 +160,23 @@ do_mmap(void *addr, size_t length, int writable, struct file *file, off_t offset
 			return NULL;
 		}
 
-		// 해당 주소에 실제로 할당된 page 구조체를 가져와 mmap_idx 저장
+		// page->mmap_idx 저장
 		struct page *p = spt_find_page(&thread_current()->spt, addr);
-		if (p != NULL)
-			p->mmap_idx = mmap_idx++;
+		ASSERT(p != NULL);
+		p->mmap_idx = page_cnt;
 
 		// 다음 페이지로 이동
-		read_bytes -= page_read_bytes;
-		zero_bytes -= page_zero_bytes;
+		total_bytes -= PGSIZE;
+		if (read_bytes >= page_read_bytes)
+			read_bytes -= page_read_bytes;
+		else
+			read_bytes = 0;
+
+		if (zero_bytes >= page_zero_bytes)
+			zero_bytes -= page_zero_bytes;
+		else
+			zero_bytes = 0;
+
 		addr += PGSIZE;
 		offset += page_read_bytes;
 	}	
@@ -195,26 +192,28 @@ do_mmap(void *addr, size_t length, int writable, struct file *file, off_t offset
 void do_munmap(void *addr) 
 {
 	struct supplemental_page_table *spt = &thread_current()->spt;
-	struct page *page;
 
-	lock_acquire(&filesys_lock);		// 파일 시스템과의 동기화를 위해 전역 락 획득 (파일과 관련된 페이지일 수 있기 때문)	
+	lock_acquire(&filesys_lock);
 
-	page = spt_find_page(spt, addr);	// 현재 주소에 해당하는 페이지를 보조 페이지 테이블에서 검색
-	if (page == NULL) {					// 페이지가 존재하지 않으면 즉시 반환 (락 해제 후)
+	struct page *page = spt_find_page(spt, addr);
+	if (page == NULL) {
 		lock_release(&filesys_lock);
 		return;
 	}
 
-	int mmap_idx = page->mmap_idx;		// 이 페이지가 속한 mmap 영역의 전체 페이지 수를 가져옴
+	int mmap_idx = page->mmap_idx;
 
 	// mmap_idx 만큼 반복하며 페이지 해제 수행
 	for (int i = 0; i < mmap_idx; i++) {
-		struct page *target = spt_find_page(spt, addr);		// 현재 주소에 해당하는 페이지를 다시 찾음
-		if (target != NULL)				// 페이지가 존재한다면 보조 페이지 테이블에서 제거 (즉, unmap)
-			// destroy(target_page);
-			spt_remove_page(spt, target);					
-		addr += PGSIZE;					// 다음 페이지 주소로 이동 (페이지 크기만큼 증가)
+		struct page *target = spt_find_page(spt, addr);
+		if (target == NULL) {
+			addr += PGSIZE;
+			continue;
+		}
+	
+		// TODO: dirty 처리
+		spt_remove_page(spt, target);
+		addr += PGSIZE;
 	}
-
-	lock_release(&filesys_lock);		// 락 해제 (모든 페이지 제거 후)
+	lock_release(&filesys_lock);
 }
