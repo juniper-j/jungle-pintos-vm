@@ -13,7 +13,6 @@
 #include "threads/vaddr.h"
 #include "userprog/process.h"
 
-struct lock frame_lock;		/* 25.06.06 정진영 작성 */
 struct list frame_table;
 
 /* 각 서브시스템의 초기화 코드를 호출하여 가상 메모리 서브시스템을 초기화합니다. */
@@ -28,7 +27,6 @@ vm_init (void)
 	register_inspect_intr();
 
 	list_init(&frame_table);	/* 25.05.30 고재웅 작성 */
-	lock_init(&frame_lock);		/* 25.06.06 정진영 작성 */
 }
 
 /* 페이지의 타입을 가져옵니다. 이 함수는 페이지가 초기화된 후 타입을 알고 싶을 때 유용합니다.
@@ -138,18 +136,12 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page)
 static struct frame *
 vm_get_victim (void)
 {
-	struct frame *victim = NULL;
     /* 간단한 FIFO 정책으로 희생 프레임을 선택한다. */
+	if (list_empty(&frame_table))
+        return NULL;
 
-    lock_acquire(&frame_lock);
-    if (!list_empty(&frame_table)) 
-	{
-        struct list_elem *e = list_pop_front(&frame_table);
-        victim = list_entry(e, struct frame, elem);
-    }
-    lock_release(&frame_lock);
-
-	return victim;
+	struct list_elem *e = list_pop_front(&frame_table);
+	return list_entry(e, struct frame, elem);
 }
 
 /* 한 페이지를 교체(evict)하고 해당 프레임을 반환합니다.
@@ -160,15 +152,22 @@ vm_evict_frame (void)
 	struct frame *victim = vm_get_victim ();
 
 	if (victim == NULL) {
-			return NULL;
+		return NULL;
 	}
 
-	if (victim->page != NULL) {
-			swap_out(victim->page);
-	}
-
+	struct page *page = victim->page;
+    if (page == NULL)
+        PANIC("Victim has no page");
+	
+	if (!swap_out(page))
+        return NULL;
+	
 	victim->page = NULL;
-	return victim;
+    page->frame = NULL;
+
+	pml4_clear_page(thread_current()->pml4, page->va);
+
+    return victim;
 }
 
 /* 25.05.30 고재웅 작성
@@ -179,20 +178,30 @@ vm_evict_frame (void)
 static struct frame *
 vm_get_frame(void)
 {
-	struct frame *frame = (struct frame *)malloc(sizeof(struct frame));
-	ASSERT (frame != NULL);
+	struct frame *frame = NULL;
 
-	frame->kva = palloc_get_page(PAL_USER | PAL_ZERO);  
+	// 1. 유저 풀에서 새로운 페이지 할당
+	void *kva = palloc_get_page(PAL_USER | PAL_ZERO);
 
-	if (frame->kva == NULL) {
-		free(frame);
-		frame = vm_evict_frame();
+	// 2. 할당 실패 시 PANIC
+	if (kva == NULL) {
+		struct frame *evicted = vm_evict_frame();
+        if (evicted == NULL)
+            PANIC("Eviction failed: No frame available");
+
+        evicted->page = NULL;
+		list_push_back(&frame_table, &evicted->elem);
+		return evicted;
 	}
 
-	list_push_back(&frame_table, &frame->elem);
-
+	// 3. 프레임 구조체 할당 및 초기화
+	frame = (struct frame *)malloc(sizeof(struct frame)); 
+	if (frame == NULL)
+        PANIC("Failed to allocate frame metadata");
+	frame->kva = kva;
 	frame->page = NULL;
-	ASSERT(frame->page == NULL);
+
+	list_push_back(&frame_table, &frame->elem);
 	return frame;
 }
 

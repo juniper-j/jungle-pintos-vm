@@ -114,11 +114,11 @@ anon_swap_out (struct page *page)
 	size_t swap_idx = bitmap_scan_and_flip(swap_table, 0, 1, false);
 	lock_release(&bitmap_lock);
 	
-	// // swap slot 할당 실패 시 처리
-	// if (swap_idx == BITMAP_ERROR) {
-	// 	ASSERT(bitmap_test(swap_table, swap_idx) == false);	// 해당 비트는 flip되지 않았어야 정상 → bitmap_test()로 검증
-	// 	return false;		// 할당 실패했으므로 해당 bit는 여전히 false여야 함
-	// }
+	// swap slot 할당 실패 시 처리
+	if (swap_idx == BITMAP_ERROR) {
+		ASSERT(bitmap_test(swap_table, swap_idx) == false);	// 해당 비트는 flip되지 않았어야 정상 → bitmap_test()로 검증
+		return false;		// 할당 실패했으므로 해당 bit는 여전히 false여야 함
+	}
 	
 	// anon_page에 swap 위치 기록 → 이후 swap_in 시 사용
 	anon_page->swap_idx = swap_idx;
@@ -128,12 +128,22 @@ anon_swap_out (struct page *page)
 		disk_write (swap_disk, swap_idx * 8 + i, page->frame->kva + DISK_SECTOR_SIZE * i);
 	}
 	
-	// 프레임 연결 해제
-	page->frame->page = NULL;	// frame과 page 연결 해제
-	page->frame = NULL;			// page가 frame 가리키지 않게 초기화
+	/* The page is on disk; release the physical frame. */
+	list_remove(&page->frame->elem);
+	palloc_free_page(page->frame->kva);
+	free(page->frame);
+	page->frame = NULL;
+
+	/* Invalidate the page table entry. */
+	pml4_clear_page(thread_current()->pml4, page->va);
+
+	// // 프레임 연결 해제
+	// page->frame->page = NULL;	// frame과 page 연결 해제
+	// page->frame = NULL;			// page가 frame 가리키지 않게 초기화
 	
-	// 현재 가상 주소(pml4)에서 해당 물리 페이지 매핑 제거 (다음 access 시 page fault 발생 유도)
-	pml4_clear_page (thread_current()->pml4, page->va);
+	// // 현재 가상 주소(pml4)에서 해당 물리 페이지 매핑 제거 (다음 access 시 page fault 발생 유도)
+	// pml4_clear_page (thread_current()->pml4, page->va);
+
 	return true;				// 성공적으로 swap out 완료
 }
 
