@@ -27,6 +27,6 @@ int wait(tid_t pid);
 void *mmap(void *addr, size_t length, int writable, int fd, off_t offset);
 void munmap(void *addr);
 
-struct lock filesys_lock;
+extern struct lock filesys_lock;
 
 #endif /* userprog/syscall.h */

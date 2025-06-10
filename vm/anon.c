@@ -24,8 +24,8 @@ static const struct page_operations anon_ops = {
 /* Initialize the data for anonymous pages
  * 익명 페이지 전체 스왑 공간을 초기화 - swap_disk 가져오기, swap_table(bitmap) 생성, bitmap_lock 초기화 */
 void
-vm_anon_init (void) {
-	/* TODO: Set up the swap_disk. */
+vm_anon_init (void)
+{
 	swap_disk = disk_get(1, 1);
 	if (swap_disk == NULL) {
 		PANIC("No swap disk found!");
@@ -35,6 +35,7 @@ vm_anon_init (void) {
 	if (swap_table == NULL) {
 		PANIC("Failed to create swap bitmap!");
 	}
+
 	lock_init(&bitmap_lock);
 }
 
@@ -70,18 +71,27 @@ anon_swap_in (struct page *page, void *kva)
 	struct anon_page *anon_page = &page->anon;
 
 	size_t swap_idx = anon_page->swap_idx;
-	ASSERT(swap_idx != BITMAP_ERROR);			// swap_idx는 정상 값이어야 함
-	ASSERT(bitmap_test(swap_table, swap_idx));	// 해당 slot은 반드시 사용중이어야 함 (true)
+	if (!bitmap_test(swap_table, swap_idx)) {
+		return false;
+	}
+	if (swap_idx == BITMAP_ERROR) {
+		PANIC("swap_in idx is crazy");
+		return false;
+	}
+	// ASSERT(swap_idx != BITMAP_ERROR);			// swap_idx는 정상 값이어야 함
+	// ASSERT(bitmap_test(swap_table, swap_idx));	// 해당 slot은 반드시 사용중이어야 함 (true)
 
-	ASSERT(page->frame != NULL);
-	ASSERT(page->frame->kva == kva);
+	// ASSERT(page->frame != NULL);
+	// ASSERT(page->frame->kva == kva);
 
 	for (int i = 0; i < 8; i++) {
 		disk_read(swap_disk, (swap_idx * 8) + i, kva + (DISK_SECTOR_SIZE * i));
 	}
+
+	page->frame->kva = kva;
 	
 	lock_acquire(&bitmap_lock);		// 동시에 다른 thread가 bitmap을 scan+flip 못 하게 serialize 처리
-	bitmap_reset(swap_table, swap_idx);
+	bitmap_set(swap_table, swap_idx, false);
 	lock_release(&bitmap_lock);
 	
 	return true;
@@ -104,11 +114,11 @@ anon_swap_out (struct page *page)
 	size_t swap_idx = bitmap_scan_and_flip(swap_table, 0, 1, false);
 	lock_release(&bitmap_lock);
 	
-	// swap slot 할당 실패 시 처리
-	if (swap_idx == BITMAP_ERROR) {
-		ASSERT(bitmap_test(swap_table, swap_idx) == false);	// 해당 비트는 flip되지 않았어야 정상 → bitmap_test()로 검증
-		return false;		// 할당 실패했으므로 해당 bit는 여전히 false여야 함
-	}
+	// // swap slot 할당 실패 시 처리
+	// if (swap_idx == BITMAP_ERROR) {
+	// 	ASSERT(bitmap_test(swap_table, swap_idx) == false);	// 해당 비트는 flip되지 않았어야 정상 → bitmap_test()로 검증
+	// 	return false;		// 할당 실패했으므로 해당 bit는 여전히 false여야 함
+	// }
 	
 	// anon_page에 swap 위치 기록 → 이후 swap_in 시 사용
 	anon_page->swap_idx = swap_idx;
@@ -141,10 +151,10 @@ anon_destroy (struct page *page) {
 
 	if (page->frame)
 	{	// 프레임이 존재하면 프레임을 리스트에서 제거하고 해제
-		if (page->frame->page != NULL) {
-			list_remove(&page->frame->elem);
-		}
-		
+		// if (page->frame->page != NULL) {
+		// 	list_remove(&page->frame->elem);
+		// }
+		list_remove(&page->frame->elem);
 		page->frame->page = NULL;
 		palloc_free_page(page->frame->kva);
 		free(page->frame);

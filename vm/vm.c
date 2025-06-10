@@ -14,6 +14,7 @@
 #include "userprog/process.h"
 
 struct lock frame_lock;		/* 25.06.06 정진영 작성 */
+struct list frame_table;
 
 /* 각 서브시스템의 초기화 코드를 호출하여 가상 메모리 서브시스템을 초기화합니다. */
 void 
@@ -135,10 +136,18 @@ spt_remove_page (struct supplemental_page_table *spt, struct page *page)
 
 /* 교체될 struct frame을 가져옵니다. */
 static struct frame *
-vm_get_victim (void) 
+vm_get_victim (void)
 {
 	struct frame *victim = NULL;
-	/* TODO: 교체 정책을 여기서 구현해서 희생자 페이지 찾기 */
+    /* 간단한 FIFO 정책으로 희생 프레임을 선택한다. */
+
+    lock_acquire(&frame_lock);
+    if (!list_empty(&frame_table)) 
+	{
+        struct list_elem *e = list_pop_front(&frame_table);
+        victim = list_entry(e, struct frame, elem);
+    }
+    lock_release(&frame_lock);
 
 	return victim;
 }
@@ -148,13 +157,18 @@ vm_get_victim (void)
 static struct frame *
 vm_evict_frame (void) 
 {
-	struct frame *victim UNUSED = vm_get_victim ();
-	/* TODO: swap out the victim and return the evicted frame. */
+	struct frame *victim = vm_get_victim ();
 
-	/* TODO: 여기서 swap_out 매크로를 호출??
-	 *	pml4_clear_page를 아마 사용?? (잘 모름)
-	 */
-	return NULL;
+	if (victim == NULL) {
+			return NULL;
+	}
+
+	if (victim->page != NULL) {
+			swap_out(victim->page);
+	}
+
+	victim->page = NULL;
+	return victim;
 }
 
 /* 25.05.30 고재웅 작성
@@ -170,13 +184,14 @@ vm_get_frame(void)
 
 	frame->kva = palloc_get_page(PAL_USER | PAL_ZERO);  
 
-	if (frame->kva == NULL)
+	if (frame->kva == NULL) {
+		free(frame);
 		frame = vm_evict_frame();
-	else
-		list_push_back(&frame_table, &frame->elem);
+	}
+
+	list_push_back(&frame_table, &frame->elem);
 
 	frame->page = NULL;
-
 	ASSERT(frame->page == NULL);
 	return frame;
 }

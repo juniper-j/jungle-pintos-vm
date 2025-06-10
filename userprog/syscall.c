@@ -16,6 +16,7 @@
 #include <stdlib.h>    // malloc, free
 #include "devices/input.h"  // input_getc
 
+struct lock filesys_lock;
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
 
