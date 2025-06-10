@@ -44,11 +44,11 @@ check_address(void *addr)
     if (!is_user_vaddr(addr) || addr == NULL)   // null이거나 커널 영역 접근 시
         exit(-1);
 
-    /* 페이지 테이블에서 직접 확인 (Project 2까지) */
-    if (pml4_get_page(thread_current()->pml4, addr) == NULL)
-        exit(-1);
+    // /* 페이지 테이블에서 직접 확인 (Project 2까지) */
+    // if (pml4_get_page(thread_current()->pml4, addr) == NULL)
+    //     exit(-1);
 
-    return spt_find_page (&thread_current ()->spt, addr);
+    // return spt_find_page (&thread_current ()->spt, addr);
 }
 
 #ifdef VM

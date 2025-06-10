@@ -89,6 +89,7 @@ vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writable,
 				page_initializer = file_backed_initializer;
 				break;
 			default:
+				free(page);
 				goto err;
 		}
 		/* TODO: spt에 페이지를 삽입합니다. */
@@ -212,20 +213,21 @@ static void
 vm_stack_growth(void *addr)
 {
 	void *upage = pg_round_down(addr);
+	if (vm_alloc_page(VM_ANON | VM_MARKER_0, upage, 1));
 
-	if (spt_find_page(&thread_current()->spt, upage) != NULL)
-        return;  // 이미 만들어졌으면 아무 것도 하지 않음
+	// if (spt_find_page(&thread_current()->spt, upage) != NULL)
+    //     return;  // 이미 만들어졌으면 아무 것도 하지 않음
 
-	if (vm_alloc_page(VM_ANON | VM_MARKER_0, upage, 1)) {
-		// 스택 최하단에 새 스택 페이지 할당
-		bool success = vm_claim_page(upage);
+	// if (vm_alloc_page(VM_ANON | VM_MARKER_0, upage, 1)) {
+	// 	// 스택 최하단에 새 스택 페이지 할당
+	// 	bool success = vm_claim_page(upage);
 
-		if (success) {
-			if (upage < thread_current()->stack_lower_bound) {
-            	thread_current()->stack_lower_bound = upage;
-			}
-        }
-	}
+	// 	if (success) {
+	// 		if (upage < thread_current()->stack_lower_bound) {
+    //         	thread_current()->stack_lower_bound = upage;
+	// 		}
+    //     }
+	// }
 }
 
 /* Handle the fault on write_protected page */
@@ -273,14 +275,16 @@ vm_try_handle_fault (struct intr_frame *f, void *addr, bool user, bool write, bo
 
 		/* Case1: PUSH, CALL, INT 등으로 rsp보다 낮은 주소 먼저 접근 */
 		/* 스택 포인터보다 더 낮은 주소를 먼저 참조한 경우 */
-		if (cur->stack_lower_bound <= rsp - 8 && rsp - 8 == addr && addr <= USER_STACK) {
+		if (cur->stack_lower_bound <= rsp - 8 && rsp - 8 <= addr && addr <= USER_STACK)
+		{
 			vm_stack_growth(addr);
-			return true;
+			// return true;
 		}
 		/* Case2: 일반적 stack 사용 */
-		else if (cur->stack_lower_bound <= rsp && rsp <= addr && addr <= USER_STACK) {
+		else if (cur->stack_lower_bound <= rsp && rsp <= addr && addr <= USER_STACK)
+		{
 			vm_stack_growth(addr);
-			return true;
+			// return true;
 		}
 
 		// 4. lazy load 처리
@@ -395,10 +399,10 @@ supplemental_page_table_copy (struct supplemental_page_table *dst,
             if (!vm_alloc_page_with_initializer(VM_TYPE(type), upage, writable, NULL, aux))
                 return false;
 
-            // struct page *page = spt_find_page(dst, upage);
-            // file_backed_initializer(page, type, NULL);
-            // page->frame = src_page->frame;
-            // pml4_set_page(thread_current()->pml4, page->va, src_page->frame->kva, src_page->writable);
+            struct page *page = spt_find_page(dst, upage);
+            file_backed_initializer(page, type, NULL);
+            page->frame = src_page->frame;
+            pml4_set_page(thread_current()->pml4, page->va, src_page->frame->kva, src_page->writable);
             continue;
 		}
 
