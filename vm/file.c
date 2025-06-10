@@ -103,13 +103,15 @@ file_backed_swap_out(struct page *page)
 		pml4_set_dirty(thread_current()->pml4, page->va, false);
 	}
 	
-	list_remove(&page->frame->elem);
-	palloc_free_page(page->frame->kva);
-	free(page->frame);
-	page->frame = NULL;
+	// list_remove(&page->frame->elem);
+	// palloc_free_page(page->frame->kva);
+	// free(page->frame);
+	// page->frame = NULL;
 
-	pml4_clear_page(cur->pml4, page->va);   // invalidate PTE
+	// pml4_clear_page(cur->pml4, page->va);   // invalidate PTE
 	
+	/* Evict the page but keep the frame available for reuse. */
+	page->frame->page = NULL;
 	return true;
 }
 

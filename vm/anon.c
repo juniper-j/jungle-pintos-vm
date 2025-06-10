@@ -128,14 +128,14 @@ anon_swap_out (struct page *page)
 		disk_write (swap_disk, swap_idx * 8 + i, page->frame->kva + DISK_SECTOR_SIZE * i);
 	}
 	
-	/* The page is on disk; release the physical frame. */
-	list_remove(&page->frame->elem);
-	palloc_free_page(page->frame->kva);
-	free(page->frame);
-	page->frame = NULL;
+	// /* The page is on disk; release the physical frame. */
+	// list_remove(&page->frame->elem);
+	// palloc_free_page(page->frame->kva);
+	// free(page->frame);
+	// page->frame = NULL;
 
-	/* Invalidate the page table entry. */
-	pml4_clear_page(thread_current()->pml4, page->va);
+	// /* Invalidate the page table entry. */
+	// pml4_clear_page(thread_current()->pml4, page->va);
 
 	// // 프레임 연결 해제
 	// page->frame->page = NULL;	// frame과 page 연결 해제
@@ -144,6 +144,8 @@ anon_swap_out (struct page *page)
 	// // 현재 가상 주소(pml4)에서 해당 물리 페이지 매핑 제거 (다음 access 시 page fault 발생 유도)
 	// pml4_clear_page (thread_current()->pml4, page->va);
 
+	/* The page is on disk now.  The frame will be reused by the caller. */
+	page->frame->page = NULL;
 	return true;				// 성공적으로 swap out 완료
 }
 

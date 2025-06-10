@@ -71,29 +71,31 @@ vm_alloc_page_with_initializer(enum vm_type type, void *upage, bool writable,
 		/* TODO: 페이지를 생성하고, VM 유형에 따라 초기화 파일을 가져옵니다.Add commentMore actions
 		 * TODO: 그런 다음 uninit_new를 호출하여 "uninit" 페이지 구조체를 생성합니다.
 		 * TODO: uninit_new를 호출한 후 필드를 수정해야 합니다. */
-		struct page *p = malloc(sizeof(struct page));
-		if (!p)
+		struct page *page = malloc(sizeof(struct page));
+		if (!page)
 			goto err;
 		
-		typedef bool (*initializer_by_type)(struct page *, enum vm_type, void *);
-		initializer_by_type initializer = NULL;
+		// typedef bool (*initializer_by_type)(struct page *, enum vm_type, void *);
+		// initializer_by_type initializer = NULL;
+
+		bool (*page_initializer)(struct page *, enum vm_type, void *);
 
 		switch (VM_TYPE(type))
 		{
 			case VM_ANON:
-				initializer = anon_initializer;
+				page_initializer = anon_initializer;
 				break;
 			case VM_FILE:
-				initializer = file_backed_initializer;
+				page_initializer = file_backed_initializer;
 				break;
 			default:
 				goto err;
 		}
 		/* TODO: spt에 페이지를 삽입합니다. */
-		uninit_new(p, upage, init, type, aux, initializer);
-		p->writable = writable;
+		uninit_new(page, upage, init, type, aux, page_initializer);
+		page->writable = writable;
 
-		return spt_insert_page(spt, p);
+		return spt_insert_page(spt, page);
 	}
 err:
 	return false;
