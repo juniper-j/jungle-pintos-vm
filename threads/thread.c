@@ -392,7 +392,6 @@ thread_get_priority (void) {
 /* Sets the current thread's nice value to NICE. */
 void
 thread_set_nice (int nice UNUSED) {
-	/* TODO: Your implementation goes here */
 	/* 현재 스레드의 nice 값을 설정한다. */
     struct thread *t = thread_current();
 
