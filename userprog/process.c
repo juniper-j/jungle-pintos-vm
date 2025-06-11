@@ -27,8 +27,13 @@
 #include "vm/file.h"
 #endif
 
+struct ELF64_hdr;
+struct ELF64_PHDR;
+
 static void process_cleanup (void);
-static bool load (const char *file_name, struct intr_frame *if_);
+static bool load (const char *file_name, struct intr_frame *if_, char **argv, int argc);
+static bool validate_elf (struct file *file, struct ELF64_hdr *ehdr);
+static bool load_segments (struct file *file, const struct ELF64_hdr *ehdr);
 static void initd (void *f_name);
 static void __do_fork (void *);
 
@@ -233,7 +238,9 @@ process_exec (void *f_name) {
 	bool is_lock_held = lock_held_by_current_thread(&filesys_lock);
 	if (!is_lock_held)
 		lock_acquire(&filesys_lock);
-	success = load(file_name, &_if);
+
+	success = load(file_name, &_if, argv, argc);
+
 	if (!is_lock_held)
 		lock_release(&filesys_lock);
 
@@ -241,10 +248,6 @@ process_exec (void *f_name) {
 		palloc_free_page(file_name);
 		return -1;
 	}
-	argument_stack(argv, argc, &_if);
-		
-	_if.R.rdi = argc;
-	_if.R.rsi = (char *)_if.rsp + 8;
 
 	/* Start switched process. */
 	palloc_free_page(file_name);
@@ -433,18 +436,16 @@ bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
  * and its initial stack pointer into *RSP.
  * Returns true if successful, false otherwise. */
 static bool
-load (const char *file_name, struct intr_frame *if_) {
+load (const char *file_name, struct intr_frame *if_, char **argv, int argc) {
 	struct thread *t = thread_current ();
 	struct ELF ehdr;
 	struct file *file = NULL;
-	off_t file_ofs;
 	bool success = false;
-	int i;
 
 	/* Allocate and activate page directory. */
 	t->pml4 = pml4_create ();
 	if (t->pml4 == NULL)
-		goto done;
+			goto done;
 	process_activate (thread_current ());
 
 	/* Open executable file. */
@@ -453,81 +454,17 @@ load (const char *file_name, struct intr_frame *if_) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
-	
+
 	/* Read and verify executable header. */
-	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
-			|| memcmp (ehdr.e_ident, "\177ELF\2\1\1", 7)
-			|| ehdr.e_type != 2
-			|| ehdr.e_machine != 0x3E // amd64
-			|| ehdr.e_version != 1
-			|| ehdr.e_phentsize != sizeof (struct Phdr)
-			|| ehdr.e_phnum > 1024) {
+	if (!validate_elf (file, &ehdr)) {
 		printf ("load: %s: error loading executable\n", file_name);
 		goto done;
 	}
 
-	/* Read program headers. */
-	file_ofs = ehdr.e_phoff;
-	for (i = 0; i < ehdr.e_phnum; i++) {
-		struct Phdr phdr;
+	/* Load segments. */
+	if (!load_segments (file, &ehdr))
+		goto done;
 
-		#ifdef WSL
-				// WSL 전용 코드
-				off_t phdr_ofs = ehdr.e_phoff + i * sizeof(struct Phdr);
-				file_seek(file, phdr_ofs);
-				if (file_read(file, &phdr, sizeof phdr) != sizeof phdr)
-					goto done;
-		#else
-				// docker(기본) 전용 코드
-				if (file_ofs < 0 || file_ofs > file_length(file))
-					goto done;
-				file_seek(file, file_ofs);
-		#endif
-
-		if (file_read (file, &phdr, sizeof phdr) != sizeof phdr)
-			goto done;
-		file_ofs += sizeof phdr;
-		switch (phdr.p_type) {
-			case PT_NULL:
-			case PT_NOTE:
-			case PT_PHDR:
-			case PT_STACK:
-			default:
-				/* Ignore this segment. */
-				break;
-			case PT_DYNAMIC:
-			case PT_INTERP:
-			case PT_SHLIB:
-				goto done;
-			case PT_LOAD:
-				if (validate_segment (&phdr, file)) {
-					bool writable = (phdr.p_flags & PF_W) != 0;
-					uint64_t file_page = phdr.p_offset & ~PGMASK;
-					uint64_t mem_page = phdr.p_vaddr & ~PGMASK;
-					uint64_t page_offset = phdr.p_vaddr & PGMASK;
-					uint32_t read_bytes, zero_bytes;
-					if (phdr.p_filesz > 0) {
-						/* Normal segment.
-						 * Read initial part from disk and zero the rest. */
-						read_bytes = page_offset + phdr.p_filesz;
-						zero_bytes = (ROUND_UP (page_offset + phdr.p_memsz, PGSIZE)
-								- read_bytes);
-					} else {
-						/* Entirely zero.
-						 * Don't read anything from disk. */
-						read_bytes = 0;
-						zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
-					}
-					if (!load_segment (file, file_page, (void *) mem_page,
-								read_bytes, zero_bytes, writable))
-						goto done;
-				}
-				else
-					goto done;
-				break;
-		}
-	}
-	
 	t->running = file;
 	file_deny_write(file); /** Project 2: Denying Writes to Executables */
 
@@ -539,13 +476,86 @@ load (const char *file_name, struct intr_frame *if_) {
 	/* Start address. */
 	if_->rip = ehdr.e_entry;
 
-	/* TODO: Your code goes here.
-	 * TODO: Implement argument passing (see project2/argument_passing.html). */
-
+	argument_stack(argv, argc, if_);
 	success = true;
 
 done:
 	return success;
+}
+
+/* Reads and validates the ELF header from FILE.  On success, stores
+ * the header into EHDR and returns true. */
+static bool
+validate_elf (struct file *file, struct ELF64_hdr *ehdr) {
+	if (file_read (file, ehdr, sizeof *ehdr) != sizeof *ehdr)
+			return false;
+	if (memcmp (ehdr->e_ident, "\177ELF\2\1\1", 7))
+			return false;
+	if (ehdr->e_type != 2 || ehdr->e_machine != 0x3E || ehdr->e_version != 1)
+			return false;
+	if (ehdr->e_phentsize != sizeof (struct Phdr) || ehdr->e_phnum > 1024)
+			return false;
+	return true;
+}
+
+/* Loads all loadable segments described in EHDR from FILE. */
+static bool
+load_segments (struct file *file, const struct ELF64_hdr *ehdr) {
+        off_t ofs = ehdr->e_phoff;
+        for (int i = 0; i < ehdr->e_phnum; i++) {
+                struct Phdr phdr;
+#ifdef WSL
+                off_t phdr_ofs = ehdr->e_phoff + i * sizeof (struct Phdr);
+                file_seek (file, phdr_ofs);
+                if (file_read (file, &phdr, sizeof phdr) != sizeof phdr)
+                        return false;
+#else
+                if (ofs < 0 || ofs > file_length (file))
+                        return false;
+                file_seek (file, ofs);
+                if (file_read (file, &phdr, sizeof phdr) != sizeof phdr)
+                        return false;
+                ofs += sizeof phdr;
+#endif
+
+                switch (phdr.p_type) {
+                        case PT_NULL:
+                        case PT_NOTE:
+                        case PT_PHDR:
+                        case PT_STACK:
+                                break;
+                        case PT_DYNAMIC:
+                        case PT_INTERP:
+                        case PT_SHLIB:
+                                return false;
+                        case PT_LOAD:
+                                if (!validate_segment (&phdr, file))
+                                        return false;
+
+                                bool writable = (phdr.p_flags & PF_W) != 0;
+                                uint64_t file_page = phdr.p_offset & ~PGMASK;
+                                uint64_t mem_page = phdr.p_vaddr & ~PGMASK;
+                                uint64_t page_offset = phdr.p_vaddr & PGMASK;
+                                uint32_t read_bytes, zero_bytes;
+
+                                if (phdr.p_filesz > 0) {
+                                        read_bytes = page_offset + phdr.p_filesz;
+                                        zero_bytes = (ROUND_UP (page_offset + phdr.p_memsz, PGSIZE)
+                                                      - read_bytes);
+                                } else {
+                                        read_bytes = 0;
+                                        zero_bytes = ROUND_UP (page_offset + phdr.p_memsz, PGSIZE);
+                                }
+
+                                if (!load_segment (file, file_page, (void *) mem_page,
+                                                  read_bytes, zero_bytes, writable))
+                                        return false;
+                                break;
+                        default:
+                                return false;
+                }
+        }
+        return true;
 }
 
 
